@@ -1,33 +1,37 @@
-import { Injectable } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger } from '@nestjs/common';
+import axios from 'axios';
+import * as process from 'node:process';
 
 @Injectable()
 export class TelegramService {
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
-  ) {}
+  private readonly logger = new Logger(TelegramService.name);
+
+  private readonly botToken: string;
+  private readonly apiUrl: string;
+
+  constructor() {
+    this.botToken = process.env.TELEGRAM_BOT_TOKEN!;
+    this.apiUrl = `https://api.telegram.org/bot${this.botToken}`;
+    if (!this.botToken) {
+      this.logger.error('TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.');
+    }
+  }
 
   /**
-   * 텔레그램 메시지 전송
+   * 특정 채팅 ID로 메시지 전송
    * @param message 보낼 메시지 내용
    */
   async sendMessage(message: string): Promise<void> {
-    const botToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
-    const chatId = this.configService.get<string>('TELEGRAM_CHAT_ID');
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-
     try {
-      await firstValueFrom(
-        this.httpService.post(url, {
-          chat_id: chatId,
-          text: message,
-        }),
-      );
+      await axios.post(`${this.apiUrl}/sendMessage`, {
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'Markdown',
+      });
     } catch (error) {
-      console.error('텔레그램 메시지 전송 실패:', error);
+      this.logger.error(
+        `텔레그램 메시지 전송 중 오류 발생: ${(error as Error).message}`,
+      );
     }
   }
 }
