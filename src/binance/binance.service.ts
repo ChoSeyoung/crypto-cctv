@@ -30,9 +30,30 @@ export class BinanceService {
         close: Number(close),
         volume: Number(volume),
       }));
-    } catch (error) {
-      this.logger.error(`Error fetching OHLCV data: ${error.message}`);
-      return [];
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+
+      this.logger.error(`Error fetching OHLCV data: ${message}`);
+      throw new Error(`Fetch failed: ${message}`);
+    }
+  }
+
+  async createMarketOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    amount: number,
+  ) {
+    try {
+      const order = await this.exchange.createMarketOrder(symbol, side, amount);
+      this.logger.log(
+        `✅ Market order placed: ${side.toUpperCase()} ${amount} ${symbol}`,
+      );
+      return order;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+
+      this.logger.error(`❌ Order failed: ${message}`);
+      throw new Error(`Order failed: ${message}`);
     }
   }
 }

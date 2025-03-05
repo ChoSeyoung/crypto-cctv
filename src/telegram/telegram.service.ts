@@ -28,10 +28,10 @@ export class TelegramService {
         text: message,
         parse_mode: 'Markdown',
       });
-    } catch (error) {
-      this.logger.error(
-        `텔레그램 메시지 전송 중 오류 발생: ${(error as Error).message}`,
-      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+
+      this.logger.error(`텔레그램 메시지 전송 중 오류 발생: ${message}`);
     }
   }
 }
