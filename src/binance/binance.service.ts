@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 export class BinanceService {
   private exchange: ccxt.binance;
   private readonly logger = new Logger(BinanceService.name);
+  private readonly trade = false;
 
   constructor(private configService: ConfigService) {
     this.exchange = new ccxt.binance({
@@ -42,18 +43,48 @@ export class BinanceService {
     symbol: string,
     side: 'buy' | 'sell',
     amount: number,
+    takeProfit: number,
+    stopLoss: number,
   ) {
-    try {
-      const order = await this.exchange.createMarketOrder(symbol, side, amount);
-      this.logger.log(
-        `✅ Market order placed: ${side.toUpperCase()} ${amount} ${symbol}`,
-      );
-      return order;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+    if (this.trade) {
+      try {
+        const order = await this.exchange.createMarketOrder(
+          symbol,
+          side,
+          amount,
+        );
 
-      this.logger.error(`❌ Order failed: ${message}`);
-      throw new Error(`Order failed: ${message}`);
+        // TP 주문 (목표가에서 지정가 청산)
+        await this.exchange.createLimitOrder(
+          symbol,
+          side === 'buy' ? 'sell' : 'buy',
+          amount,
+          takeProfit,
+        );
+
+        // SL 주문 (손절가에서 스탑 리밋 청산)
+        await this.exchange.createOrder(
+          symbol,
+          'stop',
+          side === 'buy' ? 'sell' : 'buy',
+          amount,
+          stopLoss,
+          {
+            stopPrice: stopLoss,
+          },
+        );
+
+        this.logger.log(
+          `✅ Market order placed: ${side.toUpperCase()} ${amount} ${symbol}`,
+        );
+        return order;
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
+
+        this.logger.error(`❌ Order failed: ${message}`);
+        throw new Error(`Order failed: ${message}`);
+      }
     }
   }
 }
