@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
 import { StrategyService } from './strategy.service';
-import { StrategyController } from './strategy.controller';
-import { BinanceModule } from '../binance/binance.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
-  imports: [BinanceModule, TelegramModule],
-  controllers: [StrategyController],
+  imports: [ConfigModule, TelegramModule],
+  controllers: [],
   providers: [StrategyService],
 })
 export class StrategyModule {}
