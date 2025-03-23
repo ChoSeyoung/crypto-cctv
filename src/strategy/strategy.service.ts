@@ -4,20 +4,13 @@ import { TelegramService } from '../telegram/telegram.service';
 import { UtilsService } from '../common/utils/utils.service';
 import * as ccxt from 'ccxt';
 import { ConfigService } from '@nestjs/config';
-import { EMA, MACD, Stochastic } from 'technicalindicators';
+import { ADX, EMA, MACD, Stochastic } from 'technicalindicators';
 import { Ohlcv } from './interface/ohlcv.interface';
 
 @Injectable()
 export class StrategyService {
   private readonly logger = new Logger(StrategyService.name);
   private exchange: ccxt.binance;
-  private symbol = [
-    'BTC/USDT',
-    'ETH/USDT',
-    'XRP/USDT',
-    'SOL/USDT',
-    'TRUMP/USDT',
-  ]; // 거래할 심볼
 
   constructor(
     private configService: ConfigService,
@@ -42,24 +35,24 @@ export class StrategyService {
       try {
         const ohlcv = await this.fetchOHLCV(symbol);
 
-        // 마지막 캔들의 타임스탬프 확인 (15분 단위로만 처리)
+        // 마지막 캔들의 타임스탬프 확인 (1분 단위로만 처리)
         const lastCandle = ohlcv[ohlcv.length - 2]; // **완전히 마감된 캔들 사용**
 
         // 기술적 지표 계산
-        const indicators = this.calculateIndicators(ohlcv);
+        const indicators = await this.calculateIndicators(symbol, ohlcv);
 
         // 롱/숏 포지션 체크
         if (indicators.longSignal) {
           this.logger.log(`🚀 롱 포지션 진입 (가격: ${lastCandle.close})`);
           // await this.placeOrder('buy');
           await this.telegramService.sendMessage(
-            `📈 [롱 포지션 진입] ${JSON.stringify(indicators)} 주문 완료!`,
+            `📈 [${symbol} 롱 포지션 진입] ${JSON.stringify(indicators)} 주문 완료!`,
           );
         } else if (indicators.shortSignal) {
           this.logger.log(`📉 숏 포지션 진입 (가격: ${lastCandle.close})`);
           // await this.placeOrder('sell');
           await this.telegramService.sendMessage(
-            `📉 [숏 포지션 진입] ${JSON.stringify(indicators)} 주문 완료!`,
+            `📉 [${symbol} 숏 포지션 진입] ${JSON.stringify(indicators)} 주문 완료!`,
           );
         } else {
           this.logger.log('🔍 진입 조건 미충족, 대기...');
@@ -73,14 +66,29 @@ export class StrategyService {
     }
   }
 
+  test() {
+    return true;
+  }
+
   private async getFuturesSymbols(): Promise<string[]> {
     try {
-      await this.exchange.loadMarkets(); // 마켓 데이터 로드
-      const markets: Record<string, ccxt.Market> = this.exchange.markets;
+      const result: string[] = [];
 
-      return Object.keys(markets).filter(
-        (symbol) => markets[symbol]?.type === 'future',
-      );
+      const markets = await this.exchange.loadMarkets();
+      for (const [_, data] of Object.entries(markets)) {
+        if (data === undefined) continue;
+
+        if (
+          data.quote === 'USDT' &&
+          data.active &&
+          !data.expiry &&
+          data.contract
+        ) {
+          result.push(data.id as string);
+        }
+      }
+
+      return result;
     } catch (error) {
       console.error('Error fetching futures symbols:', error);
       throw new Error('Failed to fetch Binance futures symbols.');
@@ -91,7 +99,7 @@ export class StrategyService {
    * 📊 15분 봉 기준 OHLCV 데이터 가져오기
    */
   private async fetchOHLCV(symbol: string): Promise<Ohlcv[]> {
-    const ohlcv = await this.exchange.fetchOHLCV(symbol, '15m', undefined, 200);
+    const ohlcv = await this.exchange.fetchOHLCV(symbol, '1m', undefined, 200);
 
     return ohlcv.map(([timestamp, open, high, low, close, volume]) => ({
       timestamp: Number(timestamp),
@@ -131,7 +139,7 @@ export class StrategyService {
   /**
    * 📈 기술적 지표 계산 (스토캐스틱 RSI, MACD, EMA, 거래량)
    */
-  private calculateIndicators(ohlcv: Ohlcv[]) {
+  private async calculateIndicators(symbol: string, ohlcv: Ohlcv[]) {
     const closes = ohlcv.map((candle) => candle.close);
     const highs = ohlcv.map((candle) => candle.high);
     const lows = ohlcv.map((candle) => candle.low);
@@ -143,7 +151,7 @@ export class StrategyService {
       low: lows,
       close: closes,
       period: 14,
-      signalPeriod: 3, // %D
+      signalPeriod: 3,
     });
 
     const lastStoch = stochValues[stochValues.length - 1];
@@ -163,50 +171,75 @@ export class StrategyService {
       throw new Error('Plz check lastMACD.MACD or lastMACD.signal');
     }
 
-    // 📌 이동평균선 (EMA)
+    // 📌 EMA 계산
     const ema50 = EMA.calculate({ values: closes, period: 50 });
     const ema200 = EMA.calculate({ values: closes, period: 200 });
 
-    // 📌 거래량 증가 확인
+    const lastEma50 = ema50[ema50.length - 1];
+    const lastEma200 = ema200[ema200.length - 1];
+
+    // 📌 거래량 증가 확인 (장기 평균 대비)
     const lastVolume = volumes[volumes.length - 1];
-    const avgVolume = volumes.slice(-10).reduce((a, b) => a + b, 0) / 10;
-    const volumeIncrease = lastVolume > avgVolume * 1.5;
+    const avgVolumeLong = volumes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+    const robustVolumeIncrease = lastVolume > avgVolumeLong * 1.5;
 
-    // 📌 TP/SL 계산 (최근 가격 기준)
+    // 📌 ATR 계산
+    const atr = this.calculateATR(ohlcv, 14);
+
+    // 📌 추세 강도 판단 (ADX)
+    const adxValues = ADX.calculate({
+      high: highs,
+      low: lows,
+      close: closes,
+      period: 14,
+    });
+    const lastADX = adxValues[adxValues.length - 1];
+    const strongTrend = lastADX.adx > 25;
+
+    // 📌 TP/SL 동적 설정 (추세 강도에 따른 RR조정)
     const lastClose = closes[closes.length - 1];
-    const atr = this.calculateATR(ohlcv, 14); // 14-period ATR 계산
-    const riskRewardRatio = 2; // RR 비율 1:2 적용
+    const riskRewardRatio = strongTrend ? 3 : 2;
 
-    const longTP = lastClose + atr * riskRewardRatio; // 롱 포지션 TP
-    const longSL = lastClose - atr; // 롱 포지션 SL
+    const longTP = lastClose + atr * riskRewardRatio;
+    const longSL = lastClose - atr;
 
-    const shortTP = lastClose - atr * riskRewardRatio; // 숏 포지션 TP
-    const shortSL = lastClose + atr; // 숏 포지션 SL
+    const shortTP = lastClose - atr * riskRewardRatio;
+    const shortSL = lastClose + atr;
 
-    console.log(`
-      lastStoch.k: ${lastStoch.k},
-      lastStoch.d: ${lastStoch.d},
-      lastMACD.MACD: ${lastMACD.MACD},
-      lastMACD.signal: ${lastMACD.signal},
-      lastEma50: ${ema50[ema50.length - 1]},
-      lastEma200: ${ema200[ema200.length - 1]},
-      volumeIncrease: ${volumeIncrease},
-    `);
+    // 📌 캔들 패턴 추가 (단순 최근 캔들 확인 예시)
+    const bullishCandleConfirmation =
+      closes[closes.length - 1] > highs[highs.length - 2];
+    const bearishCandleConfirmation =
+      closes[closes.length - 1] < lows[lows.length - 2];
 
     // 📌 롱/숏 신호 확인
     const longSignal =
       lastStoch.k < 20 &&
       lastStoch.d < 20 &&
       lastMACD.MACD > lastMACD.signal &&
-      ema50[ema50.length - 1] > ema200[ema200.length - 1] &&
-      volumeIncrease;
+      lastEma50 > lastEma200 &&
+      robustVolumeIncrease &&
+      bullishCandleConfirmation &&
+      strongTrend;
 
     const shortSignal =
       lastStoch.k > 80 &&
       lastStoch.d > 80 &&
       lastMACD.MACD < lastMACD.signal &&
-      ema50[ema50.length - 1] < ema200[ema200.length - 1] &&
-      volumeIncrease;
+      lastEma50 < lastEma200 &&
+      robustVolumeIncrease &&
+      bearishCandleConfirmation &&
+      strongTrend;
+
+    // 📌 RSI 특이점 알림
+    if (
+      (lastStoch.k === 0 && lastStoch.d === 0) ||
+      (lastStoch.k === 100 && lastStoch.d === 100)
+    ) {
+      await this.telegramService.sendMessage(
+        `[${symbol}] RSI 특이점 확인: lastStoch.k: ${lastStoch.k}, lastStoch.d: ${lastStoch.d}`,
+      );
+    }
 
     return {
       longSignal,
