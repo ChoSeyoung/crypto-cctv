@@ -137,7 +137,8 @@ export class StrategyService {
       const result: string[] = [];
 
       const markets = await this.exchange.loadMarkets();
-      for (const [_, data] of Object.entries(markets)) {
+      for (const market of Object.entries(markets)) {
+        const data = market[1];
         if (data === undefined) continue;
 
         if (
