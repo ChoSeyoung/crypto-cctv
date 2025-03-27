@@ -68,7 +68,7 @@ export class StrategyService {
           !data.expiry &&
           data.contract
         ) {
-          result.push(data.id as string);
+          result.push(data.symbol);
         }
       }
 
@@ -248,6 +248,7 @@ export class StrategyService {
       await this.exchange.createMarketOrder(symbol, side, amount);
     } catch (error) {
       this.logger.error('포지션 진입 오류:', error);
+      throw new Error('포지션 진입 오류');
     }
 
     // 2️⃣ 손절 (Limit 주문으로 설정)
