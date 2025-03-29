@@ -182,7 +182,7 @@ export class StrategyService {
       ) {
         const entryPrice = closes[closes.length - 1];
         const stopLoss = entryPrice - atr;
-        const takeProfit = entryPrice + atr * 1.5;
+        const takeProfit = entryPrice + atr * 2;
 
         await this.telegramService.sendMessage(
           `LONG ${symbol} / entry: ${entryPrice}, TP: ${takeProfit}, SL: ${stopLoss}`,
@@ -195,6 +195,7 @@ export class StrategyService {
           entryPrice,
           stopLoss,
           takeProfit,
+          'LONG',
         );
       }
 
@@ -208,7 +209,7 @@ export class StrategyService {
       ) {
         const entryPrice = closes[closes.length - 1];
         const stopLoss = entryPrice + atr;
-        const takeProfit = entryPrice - atr * 1.5;
+        const takeProfit = entryPrice - atr * 2;
 
         await this.telegramService.sendMessage(
           `SHORT ${symbol} / entry: ${entryPrice}, TP: ${takeProfit}, SL: ${stopLoss}`,
@@ -221,6 +222,7 @@ export class StrategyService {
           entryPrice,
           stopLoss,
           takeProfit,
+          'SHORT',
         );
       }
     }
@@ -240,18 +242,21 @@ export class StrategyService {
     entryPrice: number,
     stopLossPrice: number,
     takeProfitPrice: number,
+    positionSide: 'LONG' | 'SHORT', // ✅ 추가
   ) {
     const amount = await this.getOrderAmount(symbol, entryPrice);
 
     // 1️⃣ 시장가 주문 (포지션 진입)
     try {
-      await this.exchange.createMarketOrder(symbol, side, amount);
+      await this.exchange.createMarketOrder(symbol, side, amount, {
+        positionSide,
+      } as any);
     } catch (error) {
       this.logger.error('포지션 진입 오류:', error);
       throw new Error('포지션 진입 오류');
     }
 
-    // 2️⃣ 손절 (Limit 주문으로 설정)
+    // 2️⃣ 손절 (Stop-Limit)
     try {
       await this.exchange.createOrder(
         symbol,
@@ -269,7 +274,7 @@ export class StrategyService {
       this.logger.error('SL 설정 오류:', error);
     }
 
-    // 3️⃣ 익절 (Limit 주문으로 설정)
+    // 3️⃣ 익절 (Take Profit)
     try {
       await this.exchange.createOrder(
         symbol,
